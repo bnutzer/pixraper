@@ -1,0 +1,3 @@
+* /var/tmp should be variable
+* Fork to prevent udev timeout and subsequent killing
+* Some README docs

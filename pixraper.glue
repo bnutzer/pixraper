@@ -1,0 +1,216 @@
+#!/usr/bin/perl -w
+
+=head1 NAME
+
+pixraper.glue --add|--change|--abort
+
+Executes pixraper in a udev context
+
+=cut
+
+use strict;
+
+use Data::Dumper;
+use Pod::Usage;
+use Getopt::Long;
+use Fcntl qw(:flock);
+use File::Temp qw(tempdir);
+use POSIX ();
+use Config::IniFiles;
+
+my $debugfh;
+my $verbose = 0;
+my $opts = {};
+my $lockfh;
+
+sub dbg($@) {
+	my ($fmt, @args) = @_;
+
+	printf($debugfh $fmt . "\n", @args);
+	printf($fmt . "\n", @args) if ($verbose);
+}
+
+sub ValidateUser() {
+	if ($> != 0) {
+		die("Root privileges (probably) required. Exiting.\n");
+	}
+}
+
+sub LockPixraperGlue() {
+	open($lockfh, '>', '/run/lock/pixraper.glue.lock');
+	flock($lockfh, LOCK_EX) || die("Could not lock");
+}
+
+sub InitLog() {
+	my $debugfh;
+	open($debugfh, '>>', '/var/log/pixraper.glue.log');
+	return $debugfh;
+}
+
+
+
+sub LogStart($$$) {
+	my ($debugfh, $ARGV, $ENV) = @_;
+	printf($debugfh "%s " . "~" x 60 . "\nNew glue: \"%s %s\"\n", localtime(), $0, join(' ', @$ARGV));
+	print($debugfh Dumper($ENV));
+}
+
+sub EvaluateArgs(@) {
+	my (@ARGS) = @_;
+
+	my $opts = {
+		add	=> 0,
+		change	=> 0,
+		abort	=> 0,
+		config	=> '/etc/pixraper.conf',
+	};
+
+	Getopt::Long::GetOptionsFromArray(
+		\@ARGS,
+		'help'		=> sub { pod2usage(0); },
+		'add'		=> \$opts->{add},
+		'change'	=> \$opts->{change},
+		'abort'		=> \$opts->{abort},
+		'config'	=> \$opts->{config},
+	) || pod2usage();
+
+	pod2usage() if (($opts->{add} + $opts->{change} + $opts->{abort}) != 1);
+
+	pod2usage() if (scalar(@ARGS));
+
+	return $opts;
+}
+
+sub ReadConfig($$) {
+	my ($configfn, $requiredVars) = @_;
+
+	my %ini;
+	tie %ini, 'Config::IniFiles', ( -file => $configfn );
+
+	my $sectionPixraper = $ini{'pixraper.glue'};
+
+	for my $configVar (@{$requiredVars}) {
+		if (!$sectionPixraper->{$configVar}) {
+			pod2usage("Config variable $configVar is not set");
+		}
+	}
+
+	return $sectionPixraper;
+}
+
+sub GetDevPath($) {
+	my ($ENV) = @_;
+
+	my $devpath = $ENV->{DEVNAME};
+
+	dbg("Device name: %s", $devpath);
+	if ($devpath !~ m~^/dev/sd.1$~) {
+		dbg("Device path invalid, exiting");
+		exit 1;
+	}
+
+	return $devpath;
+}
+
+sub CreateMountpoint() {
+	my $dirname = '/var/tmp/';
+	-d $dirname || die("/var/tmp does not exist\n");
+	my $template = 'pixraper.glue.mp.' . $$ . '.XXXXXXXXXX';
+	my $mountpoint = tempdir( $template, CLEANUP => 0, DIR => $dirname );
+
+	return $mountpoint;
+}
+
+sub PerformMount($$$$) {
+	my ($devpath, $mountpoint, $uid, $gid) = @_;
+
+	my @cmd = ('mount',
+		'-o', 'fmask=0133,uid=' . $uid . ',gid=' . $gid, 
+		$devpath, $mountpoint);
+
+	dbg("Mounting: %s", join(' ', @cmd));
+
+	system(@cmd) == 0 || die("Could not mount: $!");
+}
+
+sub MountDevice($$$) {
+	my ($devpath, $uid, $gid) = @_;
+
+	my $mountpoint = CreateMountpoint();
+	PerformMount($devpath, $mountpoint, $uid, $gid);
+
+	return $mountpoint;
+}
+
+sub ValidatePixraperDevice($) {
+	my ($mountpoint) = @_;
+
+	if (-f $mountpoint . '/PIXRAPER') {
+		return 1;
+	}
+
+	return 0;
+}
+
+sub RunPixraper($$) {
+	my ($mountpoint, $config) = @_;
+
+	my $dateString = POSIX::strftime("%Y-%m-%d %H:%M", localtime());
+
+	my $cmd = sprintf('/usr/local/bin/pixraper %s 2>&1 | mailx -s "pixraper: Pictures scraped %s" -r "%s" "%s"',
+		$mountpoint,
+		$dateString,
+		$config->{sender},
+		$config->{recipient}
+	);
+	my $output = `$cmd`;
+	if ($? != 0) {
+		die("Could not execute pixraper: $!");
+	}
+
+
+
+}
+
+sub UnmountDevice($) {
+	my ($mountpoint) = @_;
+
+	my @cmd = ('umount', $mountpoint);
+	system(@cmd) == 0 || die("Could not unmount: $!");
+}
+
+sub UnlinkMountpoint($) {
+	my ($mountpoint) = @_;
+
+	rmdir($mountpoint);
+}
+
+sub UnlockPixraperGlue() {
+	unlock($lockfh);
+}
+
+sub CloseLog($) {
+	my ($debugfh) = @_;
+	close $debugfh;
+}
+
+###########################################################################
+#
+
+ValidateUser();
+LockPixraperGlue();
+$debugfh = InitLog();
+LogStart($debugfh, \@ARGV, \%ENV);
+$opts = EvaluateArgs(@ARGV);
+my $config = ReadConfig($opts->{config}, [qw(sender recipient uid gid)]);
+my $devpath = GetDevPath(\%ENV);
+my $mountpoint = MountDevice($devpath, $config->{uid}, $config->{gid});
+my $isPixraperDevice = ValidatePixraperDevice($mountpoint);
+if ($isPixraperDevice) {
+	eval {
+		RunPixraper($mountpoint, $config);
+	}
+}
+UnmountDevice($mountpoint);
+UnlinkMountpoint($mountpoint);
+CloseLog($debugfh);

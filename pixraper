@@ -1,0 +1,238 @@
+#!/usr/bin/perl -w
+
+=head1 NAME
+
+pixraper
+
+=head1 SYNOPSIS
+
+pixraper [--config=config] <directory>
+
+=cut
+
+use Pod::Usage;
+use Getopt::Long qw(GetOptionsFromArray);
+use Config::IniFiles;
+use Data::Dumper;
+use POSIX ();
+use File::Find;
+use File::Copy ();
+use File::Path;
+use File::Basename;
+
+use strict;
+
+#
+# Additonal suffixes:
+# http://www.file-extensions.org/filetype/extension/name/digital-camera-raw-files
+#
+use constant {
+	PICTURE => [ qw(DNG NEF RAW CR2 CRW JPG JPEG) ],
+	MOVIE	=> [ qw(MP4 MOV M2TS THM) ],
+};
+
+my $log = '';
+
+sub EvaluateCommandline(@) {
+	my (@ARGS) = @_;
+
+	my $config = '/etc/pixraper.conf';
+
+	Getopt::Long::GetOptionsFromArray(
+		\@ARGS,
+		'help'		=> sub { pod2usage(0); },
+		'config=s'	=> \$config,
+	) || pod2usage();
+
+	if (scalar(@ARGS) != 1) {
+		pod2usage();
+	}
+
+	if (! -r $config) {
+		pod2usage('Cannot read config ' . $config);
+	}
+
+	return ( { config => $config }, $ARGS[0] ); 
+}
+
+sub ReadConfig($$) {
+	my ($configfn, $requiredVars) = @_;
+
+	my %ini;
+	tie %ini, 'Config::IniFiles', ( -file => $configfn );
+
+	my $sectionPixraper = $ini{'pixraper'};
+
+	for my $configVar (@{$requiredVars}) {
+		if (!$sectionPixraper->{$configVar}) {
+			pod2usage("Config variable $configVar is not set");
+		}
+	}
+
+	return $sectionPixraper;
+}
+
+sub SudoTo($$) {
+	my ($username, $groupname) = @_;
+	my $uid;
+	my $gid;
+
+	if (!defined($username) || !defined($groupname)) {
+		return;
+	}
+
+	if ($username =~ m/^\d+$/) {
+		$uid = $username;
+	} else {
+		$uid = getpwnam($username);
+	}
+
+	if ($groupname =~ m/^\d+$/) {
+		$gid = $groupname;
+	} else {
+		$gid = getgrnam($groupname);
+	}
+
+	POSIX::setgid($gid) || die("Cannot setgid $groupname\n");
+	POSIX::setuid($uid) || die("Cannot setuid $username\n");
+}
+
+sub recordStat($) {
+	my ($filename) = @_;
+	my $file = {
+		filename => $filename,
+	};
+
+	($file->{dev},$file->{ino},$file->{mode},$file->{nlink},$file->{uid},$file->{gid},$file->{rdev},$file->{size},
+	$file->{atime},$file->{mtime},$file->{ctime},$file->{blksize},$file->{blocks}) = stat($filename);
+
+	return $file;
+}
+
+sub FindFiles($$) {
+	my ($srcdir, $suffixes) = @_;
+
+	my @files;
+
+	my $processFindEntry = sub {
+		my $fn = $_;
+
+		-d $fn && return;
+
+		my($filename, $dirs, $suffix) = fileparse($fn, @{$suffixes});
+		!$suffix && return;
+
+		print("$filename in $dirs with $suffix\n");
+
+		my $file = recordStat($fn);
+		$file->{suffix} = $suffix;
+		$file->{basename} = $filename . $suffix;
+
+		push @files, $file;
+	};
+
+	my @dirs = ();
+	for my $subdir (qw(DCIM MISC/THM)) {
+		my $fulldir = $srcdir . '/' . $subdir;
+		if (-d $fulldir) {
+			push @dirs, $fulldir;
+		}
+	}
+
+	find({ no_chdir => 1, wanted => $processFindEntry }, @dirs);
+
+	return \@files;
+}
+
+sub SortFilesByDay($) {
+	my ($filelist) = @_;
+	my $ret = {};
+
+	foreach my $file (@$filelist) {
+		my $day = POSIX::strftime( "%Y-%m-%d", localtime($file->{mtime}));
+		push @{$ret->{$day}}, $file;
+	}
+
+	return $ret;
+}
+
+sub ProcessFiles($$$) {
+	my ($filesPerDay, $destinationDir, $operationMode) = @_;
+
+	if (!%$filesPerDay) {
+		return;
+	}
+
+	my @requiredDirectories = map { $destinationDir . '/' . $_ } keys(%$filesPerDay);
+	print(Dumper(\@requiredDirectories));
+	File::Path::make_path(
+		@requiredDirectories,
+		{ verbose => 1 }
+	);
+
+
+	foreach my $day (keys(%$filesPerDay)) {
+		my $filedir = $destinationDir . '/' . $day;
+
+		foreach my $file (@{$filesPerDay->{$day}}) {
+			my $destfile = $filedir . '/' . $file->{basename};
+			if (-e $destfile) {
+				printf("Destination file already exists: %s\n", $destfile);
+				next;
+			}
+			if ($operationMode eq 'copy') {
+				#File::Copy::copy($file->{filename}, $destfile);
+				system(qw(cp -nv), $file->{filename}, $destfile);
+			} elsif ($operationMode eq 'move') {
+				#File::Copy::move($file->{filename}, $destfile);
+				system(qw(mv -nv), $file->{filename}, $destfile);
+			} else {
+				die("Invalid operation mode: copy or move supported\n");
+			}
+		}
+	}
+}
+
+sub FetchAGPSData($) {
+	my ($dstdir) = @_;
+
+	my $AGPSSubfolder = $dstdir . '/Nikon';
+	my $AGPSFile = $AGPSSubfolder . '/NML_28A.ee';
+
+	die("Destination directory not set\n") unless ($dstdir);
+	die("Destination directory does not exist\n") unless (-d $dstdir);
+	die("Destination directory does not contain Nikon folder\n") unless (-d $AGPSSubfolder);
+
+
+	system('wget',
+		'-O',
+		$AGPSFile,
+		'http://crossgate.nikonimglib.com/dsd_redirect/redirect.do?P=F9JnZ07&R=SLOnf25&L=uTmf400&O=CVMiG00'
+	);
+}
+
+sub IfWantsAGPSData($$) {
+	my ($srcdir, $onWantsAGPSData) = @_;
+	
+	if (-f ($srcdir . '/PIXRAPER.WANTSAGPS')) {
+		$onWantsAGPSData->($srcdir);
+	}
+}
+
+###########################################################################
+#
+
+my ($opts, $srcdir) = EvaluateCommandline(@ARGV);
+my $config = ReadConfig($opts->{config}, [qw(readAsUser readAsGroup PicturesDestinationDir MoviesDestinationDir operationMode)]);
+SudoTo($config->{readAsUser}, $config->{readAsGroup});
+
+my $pictureFileList = FindFiles($srcdir, PICTURE);
+my $movieFileList = FindFiles($srcdir, MOVIE);
+
+my $pictureFilesPerDay = SortFilesByDay($pictureFileList);
+my $movieFilesPerDay = SortFilesByDay($movieFileList);
+
+ProcessFiles($pictureFilesPerDay, $config->{PicturesDestinationDir}, $config->{operationMode});
+ProcessFiles($movieFilesPerDay, $config->{MoviesDestinationDir}, $config->{operationMode});
+#
+IfWantsAGPSData($srcdir, \&FetchAGPSData);

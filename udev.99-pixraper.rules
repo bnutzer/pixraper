@@ -1,0 +1,24 @@
+#
+# execute pixraper on SD card insertion
+#
+# Some inspiration taken from arch linux udev wiki article
+# https://wiki.archlinux.org/index.php/Udev
+# and
+# https://searchcode.com/codesearch/view/16929988/
+#
+
+SUBSYSTEM!="block", GOTO="pixraper_end"
+
+IMPORT{builtin}="blkid --noraid"
+
+#
+# Abort if not vfat or exfat
+#
+ENV{ID_TYPE}!="disk", GOTO="pixraper_end"
+ENV{ID_FS_TYPE}!="vfat|exfat", GOTO="pixraper_end"
+
+ACTION=="add", RUN+="/usr/local/sbin/pixraper.glue --add"
+ACTION=="change", RUN+="/usr/local/sbin/pixraper.glue --change"
+ACTION=="remove", RUN+="/usr/local/sbin/pixraper.glue --abort"
+
+LABEL="pixraper_end"
