@@ -51,7 +51,7 @@ sub InitLog() {
 
 sub LogStart($$$) {
 	my ($debugfh, $ARGV, $ENV) = @_;
-	printf($debugfh "%s " . "~" x 60 . "\nNew glue: \"%s %s\"\n", localtime(), $0, join(' ', @$ARGV));
+	printf($debugfh "%s " . "~" x 60 . "\nNew glue: \"%s %s\"\n", "" . localtime(), $0, join(' ', @$ARGV));
 	print($debugfh Dumper($ENV));
 }
 
@@ -63,6 +63,7 @@ sub EvaluateArgs(@) {
 		change	=> 0,
 		abort	=> 0,
 		config	=> '/etc/pixraper.conf',
+		devname	=> undef,
 	};
 
 	Getopt::Long::GetOptionsFromArray(
@@ -72,6 +73,7 @@ sub EvaluateArgs(@) {
 		'change'	=> \$opts->{change},
 		'abort'		=> \$opts->{abort},
 		'config'	=> \$opts->{config},
+		'devname=s'	=> \$opts->{devname},
 	) || pod2usage();
 
 	pod2usage() if (($opts->{add} + $opts->{change} + $opts->{abort}) != 1);
@@ -79,6 +81,14 @@ sub EvaluateArgs(@) {
 	pod2usage() if (scalar(@ARGS));
 
 	return $opts;
+}
+
+sub AbortOnNonAdd($) {
+	my ($opts) = @_;
+
+	if (! $opts->{add}) {
+		exit 0;
+	}
 }
 
 sub ReadConfig($$) {
@@ -98,10 +108,18 @@ sub ReadConfig($$) {
 	return $sectionPixraper;
 }
 
-sub GetDevPath($) {
-	my ($ENV) = @_;
+sub GetDevPath($$) {
+	my ($opts, $ENV) = @_;
 
-	my $devpath = $ENV->{DEVNAME};
+	my $devpath = $opts->{devname} || $ENV->{DEVNAME};
+
+	if (!$devpath) {
+		pod2usage("No device path set, exiting");
+	}
+
+	if (! -e $devpath) {
+		pod2usage("Device path not found, exiting");
+	}
 
 	dbg("Device name: %s", $devpath);
 	if ($devpath !~ m~^/dev/sd.1$~) {
@@ -202,8 +220,9 @@ LockPixraperGlue();
 $debugfh = InitLog();
 LogStart($debugfh, \@ARGV, \%ENV);
 $opts = EvaluateArgs(@ARGV);
+AbortOnNonAdd($opts);
 my $config = ReadConfig($opts->{config}, [qw(sender recipient uid gid)]);
-my $devpath = GetDevPath(\%ENV);
+my $devpath = GetDevPath($opts, \%ENV);
 my $mountpoint = MountDevice($devpath, $config->{uid}, $config->{gid});
 my $isPixraperDevice = ValidatePixraperDevice($mountpoint);
 if ($isPixraperDevice) {
