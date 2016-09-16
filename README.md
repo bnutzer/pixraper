@@ -45,13 +45,17 @@ might have to modify the udev rules or even the scripts themselves.
 Copy and rename `udev.99-pixraper.rules` to your system's udev rule directory
 (that is `/etc/udev/rules.d/99-pixraper.rules` for me).
 
+Copy and rename systemd.pixraper@.service to one of your system's systemd 
+unit file directories (that is `/etc/systemd/system/pixraper@.service` for
+me).
+
 Copy `pixraper.conf` to the /etc directory.
 
 ### 2) Connect udev and pixraper.glue
 
 The udev ruleset you just installed should usually just work[tm]. If your blkid
 works differently than mine, or you used a different path for the script files,
-you will have to edit the udev ruleset.
+you might have to edit the udev ruleset.
 
 udev needs to be reloaded or restarted to re-read the pixraper rule.
 On my OpenSUSE system, I run
@@ -59,6 +63,13 @@ On my OpenSUSE system, I run
 	systemctl restart systemd-udevd.service
 
 to do that. Restarting the system will work as well :)
+
+The same goes for the systemd unit file (pixraper@.service): Should work out
+of the box, but if your installation directory was somewhere else, go and
+edit that file.
+
+systemd will automatically load that file when it is required, so no service
+reload or whatever is required for that.
 
 ### 3) Configure pixraper
 
@@ -76,6 +87,20 @@ Edit /etc/pixraper.conf:
   * `uid` and `gid` are used in the mount options to make the mounted device
     readable by pixraper. This will frequently be identical to the `readAsUser`
     as set in the `[pixraper]` section
+
+### 4) Prepare media
+
+Every memory card to be processed by pixraper needs to contain a file named
+`PIXRAPER`. Use `touch PIXRAPER` to create it.
+
+### 5) File suffixes
+
+At this time, pixraper only detects a very limited set of suffixes. Add your
+own in pixraper itself. Search for "NEF" (a Nikon RAW format) for the image
+format suffixes, and add your own suffixes there; search for MP4 for the
+video suffix list.
+
+A configurable list of suffixes should be a future feature.
 
 ## Cool. And now?
 
