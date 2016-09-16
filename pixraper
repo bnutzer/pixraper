@@ -25,10 +25,11 @@ use strict;
 #
 # Additonal suffixes:
 # http://www.file-extensions.org/filetype/extension/name/digital-camera-raw-files
+# http://www.file-extensions.org/filetype/extension/name/movie-video-multimedia-files
 #
 use constant {
 	PICTURE => [ qw(DNG NEF RAW CR2 CRW JPG JPEG) ],
-	MOVIE	=> [ qw(MP4 MOV M2TS THM) ],
+	MOVIE	=> [ qw(MP4 MOV M2TS THM SRT) ],
 };
 
 my $log = '';
@@ -182,7 +183,7 @@ sub ProcessFiles($$$) {
 			}
 			if ($operationMode eq 'copy') {
 				#File::Copy::copy($file->{filename}, $destfile);
-				system(qw(cp -nv), $file->{filename}, $destfile);
+				system(qw(cp -anv), $file->{filename}, $destfile);
 			} elsif ($operationMode eq 'move') {
 				#File::Copy::move($file->{filename}, $destfile);
 				system(qw(mv -nv), $file->{filename}, $destfile);
