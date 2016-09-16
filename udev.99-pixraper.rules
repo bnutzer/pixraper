@@ -17,8 +17,8 @@ IMPORT{builtin}="blkid --noraid"
 ENV{ID_TYPE}!="disk", GOTO="pixraper_end"
 ENV{ID_FS_TYPE}!="vfat|exfat", GOTO="pixraper_end"
 
-ACTION=="add", RUN+="/usr/local/sbin/pixraper.glue --add"
-ACTION=="change", RUN+="/usr/local/sbin/pixraper.glue --change"
-ACTION=="remove", RUN+="/usr/local/sbin/pixraper.glue --abort"
+ENV{SYSTEMD_WANTS}="pixraper@%k.service"
+
+ACTION=="add", TAG+="systemd", ENV{SYSTEMD_WANTS}="pixraper@%k.service"
 
 LABEL="pixraper_end"
